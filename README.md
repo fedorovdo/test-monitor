@@ -21,22 +21,22 @@
 
  таймер загружен и активен с момента старта
  
-systemctl status test-monitor.timer
+- systemctl status test-monitor.timer
 
  увидеть, какой юнит он триггерит
  
-systemctl cat test-monitor.timer | sed -n '1,120p'
+- systemctl cat test-monitor.timer | sed -n '1,120p'
 
  Должно быть: Triggers: test-monitor.service и OnUnitActiveSec=60s
 
 # 2) Отрабатывать каждую минуту
  в списке таймеров видно NEXT/LAST, каждая минута
  
-systemctl list-timers | grep test-monitor
+- systemctl list-timers | grep test-monitor
 
  убедиться, что интервал именно 60s
  
-grep -E 'OnUnitActiveSec|OnBootSec' /etc/systemd/system/test-monitor.timer
+- grep -E 'OnUnitActiveSec|OnBootSec' /etc/systemd/system/test-monitor.timer
 
 # 3) Если процесс запущен — стучаться по HTTPS на https://test.com/monitoring/test/api
 
@@ -44,25 +44,25 @@ grep -E 'OnUnitActiveSec|OnBootSec' /etc/systemd/system/test-monitor.timer
 
  Убедиться, что целевой процесс запущен:
  
-systemctl is-active myapp.service   # должно быть "active"
+- systemctl is-active myapp.service   # должно быть "active"
 
  Указать требуемый URL и запустить проверку:
  
  поставить нужный URL из ТЗ
  
-sudo sed -i 's|^MON_URL=.*|MON_URL="https://test.com/monitoring/test/api"|' /etc/sysconfig/test-monitor
+- sudo sed -i 's|^MON_URL=.*|MON_URL="https://test.com/monitoring/test/api"|' /etc/sysconfig/test-monitor
 
  очистим лог для наглядности
  
-sudo truncate -s0 /var/log/monitoring.log
+- sudo truncate -s0 /var/log/monitoring.log
 
  разовый запуск мониторинга
  
-sudo systemctl start test-monitor.service
+- sudo systemctl start test-monitor.service
 
  Что смотреть в логе (в зависимости от ответа сервера):
  
-sudo tail -n 50 /var/log/monitoring.log
+- sudo tail -n 50 /var/log/monitoring.log
 
  Если сервер отвечает 2xx → лог может быть пуст (это норма: успех не логируем), либо появится RECOVERED (http=2xx) если до этого было «down»
  
@@ -76,41 +76,41 @@ sudo tail -n 50 /var/log/monitoring.log
 # A) Ловим перезапуск:
  перезапускаем целевой сервис
  
-sudo systemctl restart myapp.service
+- sudo systemctl restart myapp.service
 
  вручную запускаем монитор (или ждём минуту до тика таймера)
  
-sudo systemctl start test-monitor.service
+- sudo systemctl start test-monitor.service
 
  проверяем лог: должна появиться строка "process restarted: ..."
  
-sudo tail -n 50 /var/log/monitoring.log | grep 'process restarted' || true
+- sudo tail -n 50 /var/log/monitoring.log | grep 'process restarted' || true
 
 # B) Проверяем «если процесс не запущен — ничего не делать»:
  останавливаем процесс
  
-sudo systemctl stop myapp.service
+- sudo systemctl stop myapp.service
 
  чистим лог для наглядности
  
-sudo truncate -s0 /var/log/monitoring.log
+- sudo truncate -s0 /var/log/monitoring.log
 
  запускаем монитор
  
-sudo systemctl start test-monitor.service
+- sudo systemctl start test-monitor.service
 
  лог должен остаться пустым (скрипт корректно "ничего не делает")
  
-sudo tail -n 50 /var/log/monitoring.log
+- sudo tail -n 50 /var/log/monitoring.log
 
 # 5) «Если сервер мониторинга недоступен — писать в лог»
  Имитируем недоступность (нерезолвимый домен):
  
-sudo sed -i 's|^MON_URL=.*|MON_URL="https://nonexistent.example.invalid/api"|' /etc/sysconfig/test-monitor
+- sudo sed -i 's|^MON_URL=.*|MON_URL="https://nonexistent.example.invalid/api"|' /etc/sysconfig/test-monitor
 
-sudo systemctl start test-monitor.service
+- sudo systemctl start test-monitor.service
 
-sudo tail -n 50 /var/log/monitoring.log | grep 'UNREACHABLE' || true
+- sudo tail -n 50 /var/log/monitoring.log | grep 'UNREACHABLE' || true
 
 Ожидаем запись вида:
 
@@ -122,11 +122,11 @@ monitoring server UNREACHABLE (exit=6|28|...) url=...
 
 # вернуть "зелёный" URL (успех 204)
 
-sudo sed -i 's|^MON_URL=.*|MON_URL="https://httpbin.org/status/204"|' /etc/sysconfig/test-monitor
+- sudo sed -i 's|^MON_URL=.*|MON_URL="https://httpbin.org/status/204"|' /etc/sysconfig/test-monitor
 
 # очистить лог
 
-sudo truncate -s0 /var/log/monitoring.log
+- sudo truncate -s0 /var/log/monitoring.log
 
 
 
