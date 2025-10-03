@@ -1,6 +1,8 @@
-# Быстрый старт, выполняется в два шага, копипастой команд
+# Быстрый старт, выполняется в два шага, копипастой скриптов 1 и 2 , скопировали в командную строку-ентер, далее скрипт сам все создаст
+# Окружение rocky linux 9
 
 # Шаг 1 Создать тестовый сервис для проверки
+
 sudo tee /etc/systemd/system/myapp.service >/dev/null <<'EOF'
 [Unit]
 Description=Dummy myapp service for monitoring test
@@ -18,6 +20,7 @@ sudo systemctl enable --now myapp.service
 systemctl show myapp.service -p MainPID   # должен быть > 0
 
 # Шаг 2 Установка мониторинга
+
 sudo bash -s <<'EOS'
 set -euo pipefail
 
