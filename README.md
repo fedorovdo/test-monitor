@@ -39,11 +39,13 @@ systemctl list-timers | grep test-monitor
 grep -E 'OnUnitActiveSec|OnBootSec' /etc/systemd/system/test-monitor.timer
 
 # 3) Если процесс запущен — стучаться по HTTPS на https://test.com/monitoring/test/api
+
  (В примере у нас myapp.service как «процесс».)
 
  Убедиться, что целевой процесс запущен:
  
 systemctl is-active myapp.service   # должно быть "active"
+
  Указать требуемый URL и запустить проверку:
  
  поставить нужный URL из ТЗ
