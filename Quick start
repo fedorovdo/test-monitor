@@ -1,0 +1,160 @@
+# Быстрый старт, выполняется в два шага, копипастой команд
+
+# Шаг 1 Создать тестовый сервис для проверки
+sudo tee /etc/systemd/system/myapp.service >/dev/null <<'EOF'
+[Unit]
+Description=Dummy myapp service for monitoring test
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/sleep infinity
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now myapp.service
+systemctl show myapp.service -p MainPID   # должен быть > 0
+
+# Шаг 2 Установка мониторинга
+sudo bash -s <<'EOS'
+set -euo pipefail
+
+# --- мониторинговый скрипт ---
+install -D -m 0755 /dev/stdin /usr/local/bin/test_monitor.sh <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ENV_FILE="/etc/sysconfig/test-monitor"
+[[ -r "$ENV_FILE" ]] && . "$ENV_FILE"
+
+: "${MODE:=process}"
+: "${PROCESS_NAME:=test}"
+: "${UNIT_NAME:=}"
+: "${CMD_PATTERN:=}"
+: "${MON_URL:=https://httpbin.org/status/204}"
+: "${CURL_TIMEOUT:=5}"
+: "${LOG_FILE:=/var/log/monitoring.log}"
+: "${CURL_EXTRA_OPTS:=}"
+
+STATE_FILE="/run/test_monitor.state"
+LOCK_FILE="/run/test_monitor.lock"
+
+timestamp(){ date +"%Y-%m-%d %H:%M:%S%z"; }
+log(){ mkdir -p "$(dirname "$LOG_FILE")"; touch "$LOG_FILE"; chmod 0644 "$LOG_FILE"; echo "$(timestamp) $*" >> "$LOG_FILE"; }
+
+# исключаем параллельные запуски
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+get_start(){ local p="$1"; [[ -r "/proc/$p/stat" ]] || return 1; awk '{print $22}' "/proc/$p/stat"; }
+
+# выбираем PID по режиму
+pid=""; start=""
+case "$MODE" in
+  process)
+    if pid=$(pgrep -xo "$PROCESS_NAME"); then start=$(get_start "$pid"||true); fi
+    ;;
+  unit)
+    [[ -n "$UNIT_NAME" ]] || { log "config error: MODE=unit but UNIT_NAME empty"; exit 0; }
+    pid=$(systemctl show "$UNIT_NAME" -p MainPID --value 2>/dev/null || true)
+    if [[ -n "${pid:-}" && "$pid" -gt 0 ]]; then
+      start=$(get_start "$pid"||true); [[ -n "$start" ]] || pid=""
+    else
+      pid=""
+    fi
+    ;;
+  cmd)
+    [[ -n "$CMD_PATTERN" ]] || { log "config error: MODE=cmd but CMD_PATTERN empty"; exit 0; }
+    mapfile -t c < <(pgrep -fa . | awk -v pat="$CMD_PATTERN" '{pid=$1; sub(/^[0-9]+[[:space:]]+/,""); if ($0 ~ pat) print pid;}')
+    if ((${#c[@]})); then
+      for p in "${c[@]}"; do t=$(get_start "$p"||true); [[ -n "$t" ]] || continue
+        if [[ -z "${start:-}" || "$t" -lt "$start" ]]; then start="$t"; pid="$p"; fi
+      done
+    fi
+    ;;
+  *)
+    log "config error: unknown MODE='$MODE'"; exit 0;;
+esac
+
+# если процесса нет — ничего не делаем
+[[ -n "${pid:-}" ]] || exit 0
+
+# детект перезапуска по PID+starttime
+prev_pid=""; prev_start=""
+[[ -f "$STATE_FILE" ]] && read -r prev_pid prev_start < "$STATE_FILE" || true
+if [[ -z "$prev_pid" || -z "$prev_start" ]]; then
+  printf "%s %s\n" "$pid" "$start" > "$STATE_FILE"
+elif [[ "$pid" != "$prev_pid" || "$start" != "$prev_start" ]]; then
+  log "process restarted: old_pid=$prev_pid(old_start=$prev_start) -> new_pid=$pid(new_start=$start) [mode=$MODE]"
+  printf "%s %s\n" "$pid" "$start" > "$STATE_FILE"
+fi
+
+# --- пинг с логированием только смены доступности (up/down) ---
+REACH_FILE="/run/test_monitor.reach"
+curl_code=0
+http_code=$(curl -fsS -m "${CURL_TIMEOUT}" ${CURL_EXTRA_OPTS:-} -o /dev/null -w "%{http_code}" "$MON_URL") || curl_code=$?
+
+prev_reach=""
+[[ -f "$REACH_FILE" ]] && read -r prev_reach < "$REACH_FILE" || true
+
+if [[ "$curl_code" -ne 0 ]]; then
+  if [[ "$prev_reach" != "down" ]]; then
+    log "monitoring server UNREACHABLE (exit=$curl_code) url=$MON_URL"
+  fi
+  echo "down" > "$REACH_FILE"
+  exit 0
+fi
+
+case "$http_code" in
+  2??)
+    if [[ "$prev_reach" == "down" ]]; then
+      log "monitoring server RECOVERED (http=$http_code) url=$MON_URL"
+    fi
+    echo "up" > "$REACH_FILE"
+    ;;
+  *)
+    if [[ "$prev_reach" != "down" ]]; then
+      log "monitoring server NON-2XX (http=$http_code) url=$MON_URL"
+    fi
+    echo "down" > "$REACH_FILE"
+    ;;
+esac
+EOF
+
+# --- unit + timer ---
+install -D -m 0644 /dev/stdin /etc/systemd/system/test-monitor.service <<'EOF'
+[Unit]
+Description=Test monitor (process/unit/cmd) + HTTPS ping
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/sysconfig/test-monitor
+ExecStart=/usr/local/bin/test_monitor.sh
+EOF
+
+install -D -m 0644 /dev/stdin /etc/systemd/system/test-monitor.timer <<'EOF'
+[Unit]
+Description=Run test-monitor.service every minute
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=15s
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+# --- конфиг (unit + myapp.service + 204) ---
+cat >/etc/sysconfig/test-monitor <<'EOF'
+MODE="unit"
+UNIT_NAME="myapp.service"
+MON_URL="https://httpbin.org/status/204"
+CURL_TIMEOUT="5"
+LOG_FILE="/var/log/monitoring.log"
+EOF
+
+systemctl daemon-reload
+systemctl enable --now test-monitor.timer
